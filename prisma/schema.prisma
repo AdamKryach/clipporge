@@ -1,0 +1,291 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------------
+// Users & auth
+// ------------------------------------------------------------------
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  passwordHash  String
+  role          String   @default("user") // user | admin
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accounts          Account[]
+  sessions          Session[]
+  resetTokens       ResetToken[]
+  projects          Project[]
+  videos            Video[]
+  clips             Clip[]
+  processingJobs    ProcessingJob[]
+  usageRecords      UsageRecord[]
+  subscription      Subscription?
+  settings          UserSettings?
+
+  @@index([email])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ------------------------------------------------------------------
+// Projects (a project = one uploaded long-form video + its clips)
+// ------------------------------------------------------------------
+model Project {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  sourceVideoId String? @unique
+  status    String   @default("draft") // draft | uploading | processing | complete | failed | canceled
+  error     String?
+  totalClips Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceVideo Video?  @relation("ProjectSource", fields: [sourceVideoId], references: [id])
+  videos    Video[]   @relation("ProjectVideos")
+  clips     Clip[]
+  jobs      ProcessingJob[]
+  settings  ProjectSettings?
+  transcript Transcript?
+
+  @@index([userId])
+  @@index([userId, status])
+}
+
+model ProjectSettings {
+  id           String  @id @default(cuid())
+  projectId    String  @unique
+  numClips     Int     @default(5)
+  clipLength   Int     @default(30) // seconds
+  style        String  @default("auto")
+  aspectRatio  String  @default("9:16") // 9:16 | 16:9 | 1:1
+  captionsEnabled Boolean @default(true)
+  captionStyle String  @default("clean") // clean|bold|karaoke|highlight|minimal
+  captionPosition String @default("bottom")
+  captionFontSize Int  @default(34)
+  showTitleOverlay Boolean @default(true)
+  watermarkText String?
+  autoZoom     Boolean @default(true)
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ------------------------------------------------------------------
+// Videos
+// ------------------------------------------------------------------
+model Video {
+  id        String   @id @default(cuid())
+  projectId String?
+  userId    String
+  originalName String
+  storagePath String // relative path under MEDIA_STORAGE_DIR
+  mimeType  String
+  sizeBytes BigInt?
+  durationSec Float?
+  width     Int?
+  height    Int?
+  kind      String   @default("upload") // upload | source | clip | demo
+  status    String   @default("ready")
+  processedByClipId String?
+  createdAt DateTime @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project?  @relation("ProjectVideos", fields: [projectId], references: [id], onDelete: Cascade)
+  sourceProject Project? @relation("ProjectSource")
+  clips     Clip[]    @relation("ClipVideo")
+
+  @@index([userId])
+  @@index([projectId])
+}
+
+// ------------------------------------------------------------------
+// Clips
+// ------------------------------------------------------------------
+model Clip {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  videoId   String?
+  title     String
+  description String
+  hashtags  String    @default("[]") // JSON array of hashtags
+  startSec  Float
+  endSec    Float
+  durationSec Float
+  engagementScore Float
+  tags      String    @default("[]") // JSON: hook, emotional, surprise, joke, info, story
+  status    String    @default("ready")
+  outputPath String?
+  aspectRatio String    @default("9:16")
+  captionStyle String    @default("clean")
+  captionPosition String @default("bottom")
+  captionFontSize Int    @default(18)
+  titleOverlay Boolean    @default(true)
+  watermarkText String?
+  autoZoom  Boolean       @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video   Video?  @relation("ClipVideo", fields: [videoId], references: [id])
+
+  segments ClipSegment[]
+
+  @@index([projectId])
+  @@index([userId])
+}
+
+model ClipSegment {
+  id        String @id @default(cuid())
+  clipId    String
+  text      String
+  startSec  Float
+  endSec    Float
+  index     Int
+  clip      Clip   @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@index([clipId])
+}
+
+// ------------------------------------------------------------------
+// Transcript
+// ------------------------------------------------------------------
+model Transcript {
+  id        String   @id @default(cuid())
+  projectId String   @unique
+  language  String   @default("en")
+  text      String
+  segments  String   @default("[]") // JSON array of {start,end,text}
+  durationSec Float?
+  provider  String   @default("local")
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+// ------------------------------------------------------------------
+// Processing jobs
+// ------------------------------------------------------------------
+model ProcessingJob {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  type      String   @default("analyze") // upload|analyze|render
+  stage     String   @default("queued") // queued|uploading|preparing|transcribing|finding_highlights|creating_clips|adding_captions|rendering|complete|failed
+  status    String   @default("queued") // queued|running|complete|failed|canceled
+  progress  Int      @default(0)
+  message   String?
+  error     String?
+  meta      String   @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  startedAt DateTime?
+  finishedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([status])
+}
+
+// ------------------------------------------------------------------
+// Subscriptions / billing
+// ------------------------------------------------------------------
+model Subscription {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  plan          String   @default("free") // free | pro | business
+  status        String   @default("active")
+  stripeCustomerId String?
+  stripeSubId      String?
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  videoLimitMonthly Int @default(3)
+  maxVideoMinutes   Int @default(10)
+  maxClipLengthSec  Int @default(90)
+  hdExports     Boolean  @default(false)
+  watermarkFree Boolean  @default(false)
+  priorityProcessing Boolean @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UsageRecord {
+  id        String   @id @default(cuid())
+  userId    String
+  kind      String   @default("video") // video | clip | export
+  amount    Int      @default(1)
+  projectId String?
+  month     String   // "2024-01"
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, month])
+}
+
+// ------------------------------------------------------------------
+// User settings
+// ------------------------------------------------------------------
+model UserSettings {
+  id           String @id @default(cuid())
+  userId       String @unique
+  defaultClipLength Int @default(30)
+  defaultAspectRatio String @default("9:16")
+  captionStyle String @default("clean")
+  captionPosition String @default("bottom")
+  captionFontSize Int @default(18)
+  showTitleOverlay Boolean @default(true)
+  watermarkText String?
+  autoZoom Boolean @default(true)
+  notifications Boolean @default(true)
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

@@ -1,0 +1,43 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { getSessionUser } from "@/lib/api-helpers";
+import { prisma } from "@/lib/db";
+import { ensureSettings } from "@/lib/billing";
+import { getUsage } from "@/lib/billing";
+
+const schema = z.object({
+  defaultClipLength: z.number().int().min(5).max(600).optional(),
+  defaultAspectRatio: z.enum(["9:16", "16:9", "1:1"]).optional(),
+  captionStyle: z.string().optional(),
+  captionPosition: z.enum(["top", "bottom"]).optional(),
+  captionFontSize: z.number().int().min(12).max(72).optional(),
+  showTitleOverlay: z.boolean().optional(),
+  watermarkText: z.string().nullable().optional(),
+  autoZoom: z.boolean().optional(),
+  notifications: z.boolean().optional(),
+});
+
+export async function GET() {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const settings = await ensureSettings(user.id);
+  const usage = await getUsage(user.id);
+  const subscription = await prisma.subscription.findUnique({ where: { userId: user.id } });
+  return NextResponse.json({ settings, usage, subscription });
+}
+
+export async function PATCH(req: Request) {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const body = await req.json().catch(() => ({}));
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) return NextResponse.json({ error: "Invalid settings" }, { status: 400 });
+  const data: any = {};
+  for (const [k, v] of Object.entries(parsed.data)) if (v !== undefined) data[k] = v;
+  const settings = await prisma.userSettings.upsert({
+    where: { userId: user.id },
+    create: { userId: user.id, ...data },
+    update: data,
+  });
+  return NextResponse.json({ settings });
+}
